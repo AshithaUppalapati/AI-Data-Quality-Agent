@@ -1,0 +1,17 @@
+# Generated data - never commit raw data to Git
+data/
+
+# Virtual environment
+venv/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+
+# VSCode settings
+.vscode/
+
+# Environment variables (API keys etc - critical for Phase 2)
+.env

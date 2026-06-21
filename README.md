@@ -1,4 +1,4 @@
-🚀 AI Data Quality & Observability Agent
+#🚀 AI Data Quality & Observability Agent
 LLM‑powered anomaly detection, root‑cause analysis, and automated remediation for modern data platforms.
 
 📌 Overview

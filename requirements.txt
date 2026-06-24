@@ -29,3 +29,5 @@ black==24.4.2
 # Python 3.11.9 required (3.12+ incompatible with PySpark 3.5.x)
 # Java 17 required (Eclipse Temurin recommended)
 # HADOOP_HOME must point to winutils (Windows only)
+
+python-dotenv==1.2.2

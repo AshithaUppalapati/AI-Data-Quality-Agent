@@ -62,14 +62,14 @@ Traditional data quality systems rely on static rules and manual triage. This pr
 ## Features & Roadmap
 
 ### ✅ Phase 1 — Foundations
-- [ ] Synthetic dataset with schema drift
-- [ ] Spark job for DQ metrics
-- [ ] Delta Lake storage for metrics
+- [x] Synthetic dataset with schema drift
+- [x] Spark job for DQ metrics
+- [x] Delta Lake storage for metrics
 
 ### ⚡ Phase 2 — LLM Intelligence
-- [ ] LLM-powered anomaly explanation
-- [ ] SQL remediation generator
-- [ ] Slack / Jira alert generator
+- [x] LLM-powered anomaly explanation
+- [x] SQL remediation generator
+- [x] Slack / Jira alert generator
 
 ### 🔍 Phase 3 — Vector Search
 - [ ] FAISS index for historical issues

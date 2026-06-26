@@ -1,0 +1,184 @@
+Overview
+This module generates realistic, production‑like e‑commerce order data with intentional data quality issues and schema evolution.
+It is designed to support the AI‑Native Data Quality Agent, enabling robust testing of:
+
+Data quality metrics
+
+Schema drift detection
+
+Trend analysis
+
+LLM‑based anomaly explanations
+
+ETL pipeline robustness
+
+The generator produces multiple monthly batches of data, each with evolving schema and increasingly complex data quality patterns.
+
+Architecture
+The generator is composed of four main layers:
+
+1. Base Record Factory — _base_order()
+Creates a clean, realistic order record with:
+
+Order metadata
+
+Product details
+
+Pricing
+
+Customer info
+
+Order status
+
+Payment method
+
+Batch number
+
+It also models schema drift:
+
+Batch Range	Schema Behavior
+1–2	Single state column
+3–4	Split into shipping_state + billing_state
+5+	New discount_pct column appears
+
+
+This mirrors real upstream system evolution.
+
+2. Data Quality Injection Layer
+Three independent injectors simulate real‑world failure modes:
+
+a. _inject_nulls()
+Randomly nulls non‑critical fields to mimic:
+
+API gaps
+
+ETL truncation
+
+Optional fields becoming empty
+
+Critical fields like order_id and batch_num are protected.
+
+b. _inject_invalid_values()
+Injects domain‑aware violations that break business rules:
+
+Negative prices
+
+Negative quantities
+
+Future timestamps
+
+Invalid order statuses
+
+These issues pass schema validation but break downstream logic.
+
+c. _inject_duplicates()
+Simulates retry storms by duplicating a small percentage of records:
+
+Kafka at‑least‑once delivery
+
+ETL retries
+
+Partial job failures
+
+Duplicates are shuffled to appear naturally.
+
+3. Batch Orchestration — generate_batch()
+Each batch follows a controlled pipeline:
+
+Create N base records
+
+Inject nulls
+
+Inject invalid values
+
+Inject duplicates
+
+Convert to DataFrame
+
+Print summary
+
+The order of operations mirrors real ETL transformation stages.
+
+4. Multi‑Batch Simulation — generate_all_batches()
+Generates multiple months of data with:
+
+Evolving schema
+
+Evolving payment methods
+
+New fields appearing
+
+Increasing data quality issues
+
+Each batch is saved as a separate CSV, forming a time‑series dataset ideal for:
+
+Drift detection
+
+Trend analysis
+
+LLM‑based RCA
+
+Observability dashboards
+
+Why This Matters
+This generator is intentionally designed to behave like a miniature production ecosystem, not a toy dataset.
+
+It provides:
+
+Realistic data evolution
+
+Layered corruption patterns
+
+Deterministic + randomized behavior
+
+Perfect ground truth for evaluating DQ systems
+
+A controlled environment for LLM‑based explanations
+
+It is the foundation for validating the AI‑Native Data Quality Agent.
+
+Example Usage
+python
+from data_generator.generate_orders import generate_all_batches
+
+generate_all_batches(
+    n_batches=6,
+    n_records_per_batch=1000,
+    output_dir="data/orders"
+)
+This will produce:
+
+Code
+data/orders/
+    orders_batch_1.csv
+    orders_batch_2.csv
+    ...
+    orders_batch_6.csv
+Each file contains schema drift, nulls, invalid values, and duplicates.
+
+Summary
+This synthetic data generator is a production‑grade simulation tool that models:
+
+Schema drift
+
+Data corruption
+
+Upstream failures
+
+Retry storms
+
+Business rule violations
+
+It enables comprehensive testing of:
+
+Data quality metrics
+
+Drift detection
+
+LLM‑based anomaly explanations
+
+ETL robustness
+
+Observability pipelines
+
+Perfect for demonstrating senior‑level data engineering skills and validating AI‑driven data quality systems.

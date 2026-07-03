@@ -15,3 +15,5 @@ __pycache__/
 
 # Environment variables (API keys etc - critical for Phase 2)
 .env
+.env.docker
+data/

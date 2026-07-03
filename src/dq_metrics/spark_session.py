@@ -97,6 +97,7 @@ def create_spark_session(
                 "--add-opens=java.base/java.lang.invoke=ALL-UNNAMED "
                 "--add-opens=java.base/java.io=ALL-UNNAMED "
                 "--add-opens=java.base/sun.util.calendar=ALL-UNNAMED")
+        .config("spark.sql.execution.arrow.pyspark.enabled", "false")
         ).getOrCreate()
 
     # Suppress verbose INFO logs — only show warnings and errors

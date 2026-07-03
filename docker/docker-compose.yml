@@ -1,0 +1,46 @@
+version: "3.9"
+
+services:
+
+  # ── Full DQ Agent (default) ─────────────────────────────
+  dq-agent:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: ai-dq-agent
+    volumes:
+      - ../data:/app/data        # persist data between runs
+      - ../src:/app/src          # live reload during dev
+    environment:
+      - SPARK_LOCAL_IP=127.0.0.1
+      - PYTHONPATH=/app/src
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OPENAI_MODEL=${OPENAI_MODEL}
+    command: python src/llm_agent/agent_orchestrator.py
+
+  # ── DQ Metrics only (no LLM) ───────────────────────────
+  dq-metrics:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: ai-dq-metrics
+    volumes:
+      - ../data:/app/data
+      - ../src:/app/src
+    environment:
+      - SPARK_LOCAL_IP=127.0.0.1
+      - PYTHONPATH=/app/src
+    command: python src/dq_metrics/dq_metrics_job.py
+
+  # ── Data generator only ─────────────────────────────────
+  generator:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: ai-dq-generator
+    volumes:
+      - ../data:/app/data
+      - ../src:/app/src
+    environment:
+      - PYTHONPATH=/app/src
+    command: python src/data_generator/generate_orders.py

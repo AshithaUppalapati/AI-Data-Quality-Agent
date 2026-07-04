@@ -72,8 +72,8 @@ Traditional data quality systems rely on static rules and manual triage. This pr
 - [x] Slack / Jira alert generator
 
 ### 🔍 Phase 3 — Vector Search
-- [ ] FAISS index for historical issues
-- [ ] Similarity-based root-cause suggestions
+- [X] FAISS index for historical issues
+- [x] Similarity-based root-cause suggestions
 
 ### 🤖 Phase 4 — RAG Analytics Assistant
 - [ ] Metadata embeddings (dbt, Spark, Delta)

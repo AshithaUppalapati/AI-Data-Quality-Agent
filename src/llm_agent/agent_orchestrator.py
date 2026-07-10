@@ -51,6 +51,8 @@ from llm_agent.anomaly_detector import detect_all_anomalies
 from llm_agent.root_cause_analyzer import analyze_root_causes
 from llm_agent.sql_remediation import generate_sql_remediation
 from llm_agent.alert_generator import generate_all_alerts
+from llm_agent.statistical_detector import detect_statistical_anomalies
+from vector_search.rag_assistant import ask_rag_assistant
 
 # Reports output directory
 REPORTS_DIR = os.path.join(PROJECT_ROOT, "data", "reports")
@@ -90,7 +92,40 @@ def save_report(report: dict) -> str:
     print(f"[Orchestrator] Report saved → {path}")
     return path
 
-
+def combine_anomaly_reports(rule_report: dict, stat_report: dict) -> dict:
+    rule_critical = rule_report["anomalies"]["critical"]
+    rule_warnings = rule_report["anomalies"]["warnings"]
+    rule_info = rule_report["anomalies"]["info"]
+    stat_critical = stat_report["anomalies"]["critical"]
+    stat_warnings = stat_report["anomalies"]["warnings"]
+    for a in stat_critical + stat_warnings:
+        if "details" not in a:
+            a["details"] = a.get("stats", {})
+    all_critical = rule_critical + stat_critical
+    all_warnings = rule_warnings + stat_warnings
+    health_score = 100
+    health_score -= len(all_critical) * 20
+    health_score -= len(all_warnings) * 10
+    health_score = max(0, health_score)
+    if health_score < 40:
+        health_status = "CRITICAL"
+    elif health_score < 70:
+        health_status = "WARNING"
+    else:
+        health_status = "HEALTHY"
+    return {
+        "total_anomalies": len(all_critical) + len(all_warnings),
+        "critical_count": len(all_critical),
+        "warning_count": len(all_warnings),
+        "health_score": health_score,
+        "anomalies": {
+            "critical": all_critical,
+            "warnings": all_warnings,
+            "info": rule_info
+        },
+        "health_status": health_status,
+        "info_count": len(rule_info)
+    }
 # ─────────────────────────────────────────────────────────────────────────────
 # MAIN ORCHESTRATOR
 # ─────────────────────────────────────────────────────────────────────────────
@@ -101,7 +136,7 @@ def run_dq_agent(
     save_to_disk:  bool         = True
 ) -> dict:
     """
-    Run the complete DQ agent pipeline.
+    Runs the complete DQ agent pipeline.
 
     Args:
         spark:         SparkSession. If None, creates one internally.
@@ -184,87 +219,101 @@ def run_dq_agent(
             print(f"   ❌ Anomaly detector failed: {e}")
             raise
 
-        # ── STEP 3: LLM root cause analysis ──────────────────────────────
-        print("\n🧠 STEP 3: Running LLM root cause analysis...")
+        # ── STEP 3: New Statistical detection, non-fatal on failure ──────────────────────────────
+        print("\n🧠 STEP 3: Statistical anomaly detection...")
         try:
-            rca_result = analyze_root_causes(anomaly_report, context)
+            stat_report = detect_statistical_anomalies(context)
+            report["steps"]["stat_detector"] = {
+                "status": "success", "total": stat_report["total_anomalies"]
+            }
+            print(f"   ✅ {stat_report['total_anomalies']} statistical anomalies")
+        except Exception as e:
+            report["steps"]["stat_detector"] = {"status": "failed", "error": str(e)}
+            print(f"   ⚠️  Statistical detection failed: {e}")
+            stat_report = {"total_anomalies": 0, "critical_count": 0, "warning_count": 0,
+                            "anomalies": {"critical": [], "warnings": []}}
+
+
+        # STEP 4 — NEW: combine, no try/except (pure dict logic, nothing external to fail)
+        print("\n🔗 STEP 4: Combining detection results...")
+        combined_report = combine_anomaly_reports(anomaly_report, stat_report)
+        report["steps"]["combined_detection"] = {
+            "status": "success", "health_score": combined_report["health_score"]
+        }
+        print(f"   ✅ Combined health: {combined_report['health_score']}/100 "
+              f"({combined_report['health_status']})")
+
+        # STEP 5 — was STEP 3, now uses combined_report
+        print("\n🧠 STEP 5: Running LLM root cause analysis...")
+        try:
+            rca_result = analyze_root_causes(combined_report, context)
             total_cost += rca_result["cost_usd"]
             report["steps"]["root_cause_analyzer"] = {
-                "status":      "success",
-                "model":       rca_result["model"],
-                "tokens_used": rca_result["tokens_used"],
-                "cost_usd":    rca_result["cost_usd"],
-                "analysis":    rca_result["analysis"]
+                "status": "success", "analysis": rca_result["analysis"],
+                "cost_usd": rca_result["cost_usd"]
             }
-            print(f"   ✅ Analysis complete "
-                  f"({rca_result['tokens_used']} tokens, "
-                  f"${rca_result['cost_usd']})")
+            print(f"   ✅ Analysis complete (${rca_result['cost_usd']})")
         except Exception as e:
-            report["steps"]["root_cause_analyzer"] = {
-                "status": "failed",
-                "error":  str(e)
-            }
+            report["steps"]["root_cause_analyzer"] = {"status": "failed", "error": str(e)}
             print(f"   ⚠️  Root cause analysis failed: {e}")
-            print(f"   Continuing with remaining steps...")
 
-        # ── STEP 4: SQL remediation ───────────────────────────────────────
-        print("\n🔧 STEP 4: Generating SQL remediation...")
+        # STEP 6 — was STEP 4, now uses combined_report
+        print("\n🔧 STEP 6: Generating SQL remediation...")
         try:
-            sql_result = generate_sql_remediation(anomaly_report)
+            sql_result = generate_sql_remediation(combined_report)
             total_cost += sql_result["cost_usd"]
             report["steps"]["sql_remediation"] = {
-                "status":        "success",
-                "anomaly_count": sql_result["anomaly_count"],
-                "tokens_used":   sql_result["tokens_used"],
-                "cost_usd":      sql_result["cost_usd"],
-                "sql_fixes":     sql_result["sql_fixes"]
+                "status": "success", "sql_fixes": sql_result["sql_fixes"],
+                "cost_usd": sql_result["cost_usd"]
             }
-            print(f"   ✅ SQL fixes generated "
-                  f"({sql_result['anomaly_count']} fixes, "
-                  f"${sql_result['cost_usd']})")
+            print(f"   ✅ SQL fixes generated (${sql_result['cost_usd']})")
         except Exception as e:
-            report["steps"]["sql_remediation"] = {
-                "status": "failed",
-                "error":  str(e)
-            }
+            report["steps"]["sql_remediation"] = {"status": "failed", "error": str(e)}
             print(f"   ⚠️  SQL remediation failed: {e}")
-            print(f"   Continuing with remaining steps...")
 
-        # ── STEP 5: Generate alerts ───────────────────────────────────────
-        print("\n🔔 STEP 5: Generating alerts...")
+        # STEP 7 — was STEP 5, now uses combined_report
+        print("\n🔔 STEP 7: Generating alerts...")
         try:
-            alerts = generate_all_alerts(anomaly_report, pipeline_name)
+            alerts = generate_all_alerts(combined_report, pipeline_name)
             total_cost += alerts["total_cost"]
             report["steps"]["alert_generator"] = {
-                "status":       "success",
-                "slack_message": alerts["slack"]["message"],
-                "jira_summary":  alerts["jira"]["summary"],
-                "jira_priority": alerts["jira"]["priority"],
-                "cost_usd":      alerts["total_cost"]
+                "status": "success", "slack_message": alerts["slack"]["message"],
+                "cost_usd": alerts["total_cost"]
             }
-            print(f"   ✅ Slack + Jira alerts generated "
-                  f"(${alerts['total_cost']})")
+            print(f"   ✅ Alerts generated (${alerts['total_cost']})")
         except Exception as e:
-            report["steps"]["alert_generator"] = {
-                "status": "failed",
-                "error":  str(e)
-            }
+            report["steps"]["alert_generator"] = {"status": "failed", "error": str(e)}
             print(f"   ⚠️  Alert generation failed: {e}")
 
-        # ── Finalize report ───────────────────────────────────────────────
-        run_end  = datetime.now()
-        duration = (run_end - run_start).total_seconds()
+        # STEP 8 — NEW: RAG similarity search
+        print("\n🔍 STEP 8: Searching for similar past incidents...")
+        try:
+            rag_result = ask_rag_assistant(
+                question=f"Pipeline health {combined_report['health_score']}/100 "
+                         f"with {combined_report['critical_count']} critical anomalies",
+                current_context=context,
+                force_retrieval=True
+            )
+            total_cost += rag_result["cost_usd"]
+            report["steps"]["rag_assistant"] = {
+                "status": "success", "answer": rag_result["answer"],
+                "cost_usd": rag_result["cost_usd"]
+            }
+            print(f"   ✅ RAG search complete (${rag_result['cost_usd']})")
+        except Exception as e:
+            report["steps"]["rag_assistant"] = {"status": "failed", "error": str(e)}
+            print(f"   ⚠️  RAG search failed: {e}")
 
+        # Finalize — now reads from combined_report
+        run_end  = datetime.now()
         report["status"]         = "completed"
         report["total_cost_usd"] = round(total_cost, 6)
-        report["duration_secs"]  = round(duration, 1)
-        report["health_score"]   = anomaly_report["health_score"]
-        report["health_status"]  = anomaly_report["health_status"]
+        report["duration_secs"]  = round((run_end - run_start).total_seconds(), 1)
+        report["health_score"]   = combined_report["health_score"]
+        report["health_status"]  = combined_report["health_status"]
 
-        # ── Save report ───────────────────────────────────────────────────
         if save_to_disk:
-            report_path        = save_report(report)
-            report["report_path"] = report_path
+            report["report_path"] = save_report(report)
 
     except Exception as e:
         report["status"] = "failed"
@@ -275,35 +324,19 @@ def run_dq_agent(
         if owns_spark and spark:
             stop_spark_session(spark)
 
-    # ── Print summary ─────────────────────────────────────────────────────
-    print("\n" + "="*58)
-    print("  AI DATA QUALITY AGENT — COMPLETE")
-    print("="*58)
-    print(f"  Status:       {report['status'].upper()}")
-    print(f"  Health:       {report.get('health_score', 'N/A')}/100 "
-          f"({report.get('health_status', 'N/A')})")
-    print(f"  Duration:     {report.get('duration_secs', 'N/A')}s")
-    print(f"  Total cost:   ${report.get('total_cost_usd', 0)}")
-    print(f"  Report saved: {report.get('report_path', 'N/A')}")
-    print("="*58 + "\n")
+    print(f"\n✅ Status: {report['status'].upper()} | "
+          f"Health: {report.get('health_score','N/A')}/100 | "
+          f"Cost: ${report.get('total_cost_usd', 0)}\n")
 
     return report
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# CLI — run the full agent
-# ─────────────────────────────────────────────────────────────────────────────
-
 if __name__ == "__main__":
     report = run_dq_agent(
-        pipeline_name = "E-commerce Orders Pipeline",
-        save_to_disk  = True
+        pipeline_name="E-commerce Orders Pipeline",
+        save_to_disk=True
     )
-
-    # Print final Slack alert
-    slack = report.get("steps", {}) \
-                  .get("alert_generator", {}) \
-                  .get("slack_message", "")
+    slack = report.get("steps", {}).get("alert_generator", {}).get("slack_message", "")
     if slack:
         print("\n📱 SLACK ALERT PREVIEW:")
         print("-"*40)

@@ -76,14 +76,18 @@ Traditional data quality systems rely on static rules and manual triage. This pr
 - [x] Similarity-based root-cause suggestions
 
 ### 🤖 Phase 4 — RAG Analytics Assistant
-- [X] Metadata embeddings (dbt, Spark, Delta)
+- [] Metadata embeddings (dbt, Spark, Delta)
 - [X] RAG assistant for pipeline questions
-- [X] Documentation generator
+- [] Documentation generator
 
 ### 🌐 Phase 5 — API Layer
-- [ ] FastAPI endpoints
-- [ ] Notebook demo
-- [ ] Streamlit UI (optional)
+- [ ] Task 1: Verify FastAPI + uvicorn installed
+- [ ] Task 2: App skeleton + GET /health endpoint
+- [ ] Task 3: POST /run-agent endpoint
+- [ ] Task 4: POST /ask endpoint (RAG assistant)
+- [ ] Task 5: GET /reports and GET /reports/{id} endpoints
+- [ ] Task 6: API tests
+- [ ] Task 7: Docs, commit, push
 
 ---
 

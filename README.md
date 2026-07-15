@@ -81,13 +81,68 @@ Traditional data quality systems rely on static rules and manual triage. This pr
 - [] Documentation generator
 
 ### 🌐 Phase 5 — API Layer
-- [ ] Task 1: Verify FastAPI + uvicorn installed
-- [ ] Task 2: App skeleton + GET /health endpoint
-- [ ] Task 3: POST /run-agent endpoint
-- [ ] Task 4: POST /ask endpoint (RAG assistant)
-- [ ] Task 5: GET /reports and GET /reports/{id} endpoints
-- [ ] Task 6: API tests
-- [ ] Task 7: Docs, commit, push
+- [X] Task 1: Verify FastAPI + uvicorn installed
+- [X] Task 2: App skeleton + GET /health endpoint
+- [X] Task 3: POST /run-agent endpoint
+- [X] Task 4: POST /ask endpoint (RAG assistant)
+- [x] Task 5: GET /reports and GET /reports/{id} endpoints
+- [x] Task 6: API tests
+- [x] Task 7: Docs, commit, push
+
+---
+
+## API Layer
+
+A FastAPI service exposes the full pipeline over HTTP so it can be triggered, queried, and audited without touching Spark or the CLI directly.
+
+Run locally:
+
+​```bash
+cd src/api
+uvicorn main:app --reload
+​```
+
+Runs on `http://127.0.0.1:8000`; interactive Swagger docs at `/docs`.
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `GET`  | `/health` | Liveness check |
+| `POST` | `/run-agent` | Runs the full DQ pipeline (metrics → anomaly detection → root cause → SQL remediation → alerts → RAG) and returns the report |
+| `POST` | `/ask` | Ask the RAG assistant a question about pipeline health/history |
+| `GET`  | `/reports` | List all past pipeline runs, newest first |
+| `GET`  | `/reports/{id}` | Fetch the full report for a specific run |
+
+### Example: run the pipeline
+
+​```bash
+curl.exe -X POST http://127.0.0.1:8000/run-agent -H "Content-Type: application/json" -d "{}"
+​```
+
+💰 Each call spins up a real Spark session and makes real LLM calls — roughly $0.001 and 30-60s per run.
+
+### Example: ask a question
+
+​```powershell
+$body = @{ question = "Has schema drift happened before in this pipeline?" } | ConvertTo-Json
+Invoke-RestMethod -Uri http://127.0.0.1:8000/ask -Method Post -ContentType "application/json" -Body $body
+​```
+
+Pass `"include_current_context": true` to ground the answer in live pipeline metrics (spins up Spark; slower).
+
+### Example: browse past runs
+
+​```powershell
+Invoke-RestMethod -Uri http://127.0.0.1:8000/reports -Method Get
+Invoke-RestMethod -Uri http://127.0.0.1:8000/reports/<id> -Method Get
+​```
+
+### Tests
+
+​```bash
+pytest tests/test_api.py -v
+​```
+
+`/run-agent` and `/ask` are tested against mocked pipeline functions — the suite never triggers real Spark sessions or OpenAI calls. `/health` and `/reports` are tested against real file I/O in a temp directory.
 
 ---
 

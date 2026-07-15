@@ -76,9 +76,9 @@ Traditional data quality systems rely on static rules and manual triage. This pr
 - [x] Similarity-based root-cause suggestions
 
 ### 🤖 Phase 4 — RAG Analytics Assistant
-- [ ] Metadata embeddings (dbt, Spark, Delta)
-- [ ] RAG assistant for pipeline questions
-- [ ] Documentation generator
+- [X] Metadata embeddings (dbt, Spark, Delta)
+- [X] RAG assistant for pipeline questions
+- [X] Documentation generator
 
 ### 🌐 Phase 5 — API Layer
 - [ ] FastAPI endpoints

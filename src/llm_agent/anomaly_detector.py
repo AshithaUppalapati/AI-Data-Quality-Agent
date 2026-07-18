@@ -52,6 +52,50 @@ THRESHOLDS = {
     "volume_spike_pct":         50.0,  # flag if row count spikes > 50%
 }
 
+# ─────────────────────────────────────────────────────────────────────────────
+# SCORING — single source of truth for health_score, shared with the orchestrator
+# ─────────────────────────────────────────────────────────────────────────────
+
+SCORING_WEIGHTS = {
+    "critical_penalty": 20,   # points deducted per CRITICAL anomaly
+    "warning_penalty":  10,   # points deducted per WARNING anomaly
+    "info_penalty":     2,    # points deducted per INFO anomaly
+}
+
+HEALTH_STATUS_BANDS = {
+    "critical_below": 40,   # health_score < this → CRITICAL
+    "warning_below":  70,   # health_score < this → WARNING
+    # health_score >= warning_below              → HEALTHY
+}
+
+
+def calculate_health_score(critical_count: int, warning_count: int,
+                            info_count: int = 0) -> dict:
+    """
+    Single source of truth for turning anomaly counts into a health score
+    and status label. Both detect_all_anomalies() (rule-based only) and
+    combine_anomaly_reports() in the orchestrator (rule-based + statistical)
+    call this — they previously reimplemented the formula independently,
+    and had already drifted apart (the orchestrator's version silently
+    ignored info_count entirely).
+
+    Tune SCORING_WEIGHTS / HEALTH_STATUS_BANDS per domain risk tolerance.
+    """
+    health_score = 100
+    health_score -= critical_count * SCORING_WEIGHTS["critical_penalty"]
+    health_score -= warning_count * SCORING_WEIGHTS["warning_penalty"]
+    health_score -= info_count * SCORING_WEIGHTS["info_penalty"]
+    health_score = max(0, health_score)
+
+    if health_score < HEALTH_STATUS_BANDS["critical_below"]:
+        health_status = "CRITICAL"
+    elif health_score < HEALTH_STATUS_BANDS["warning_below"]:
+        health_status = "WARNING"
+    else:
+        health_status = "HEALTHY"
+
+    return {"health_score": health_score, "health_status": health_status}
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # ANOMALY BUILDER HELPER
@@ -427,24 +471,21 @@ def detect_all_anomalies(context: dict) -> dict:
     critical = [a for a in all_anomalies if a["severity"] == "CRITICAL"]
     warnings = [a for a in all_anomalies if a["severity"] == "WARNING"]
     info     = [a for a in all_anomalies if a["severity"] == "INFO"]
-
-    # Pipeline health score (0-100)
-    # Starts at 100, deduct points per anomaly
-    health_score = 100
-    health_score -= len(critical) * 20
-    health_score -= len(warnings) * 10
-    health_score -= len(info) * 2
-    health_score  = max(0, health_score)
+    
+    # Pipeline health score — shared formula, see calculate_health_score()
+    scoring = calculate_health_score(
+        critical_count = len(critical),
+        warning_count  = len(warnings),
+        info_count     = len(info)
+    )
 
     report = {
         "total_anomalies": len(all_anomalies),
         "critical_count":  len(critical),
         "warning_count":   len(warnings),
         "info_count":      len(info),
-        "health_score":    health_score,
-        "health_status":   "CRITICAL" if health_score < 40
-                           else "WARNING" if health_score < 70
-                           else "HEALTHY",
+        "health_score":    scoring["health_score"],
+        "health_status":   scoring["health_status"],
         "anomalies":       {
             "critical": critical,
             "warnings": warnings,
@@ -453,7 +494,7 @@ def detect_all_anomalies(context: dict) -> dict:
     }
 
     print(f"[AnomalyDetector] Detection complete:")
-    print(f"  Health score:  {health_score}/100 ({report['health_status']})")
+    print(f"  Health score:  {report['health_score']}/100 ({report['health_status']})")
     print(f"  Critical:      {len(critical)}")
     print(f"  Warnings:      {len(warnings)}")
     print(f"  Info:          {len(info)}")

@@ -47,7 +47,7 @@ sys.path.insert(0, os.path.join(PROJECT_ROOT, "src"))
 from pyspark.sql import SparkSession
 from dq_metrics.spark_session import create_spark_session, stop_spark_session
 from llm_agent.metrics_reader import build_full_context
-from llm_agent.anomaly_detector import detect_all_anomalies
+from llm_agent.anomaly_detector import detect_all_anomalies, calculate_health_score
 from llm_agent.root_cause_analyzer import analyze_root_causes
 from llm_agent.sql_remediation import generate_sql_remediation
 from llm_agent.alert_generator import generate_all_alerts
@@ -103,27 +103,26 @@ def combine_anomaly_reports(rule_report: dict, stat_report: dict) -> dict:
             a["details"] = a.get("stats", {})
     all_critical = rule_critical + stat_critical
     all_warnings = rule_warnings + stat_warnings
-    health_score = 100
-    health_score -= len(all_critical) * 20
-    health_score -= len(all_warnings) * 10
-    health_score = max(0, health_score)
-    if health_score < 40:
-        health_status = "CRITICAL"
-    elif health_score < 70:
-        health_status = "WARNING"
-    else:
-        health_status = "HEALTHY"
+    # Shared formula — see calculate_health_score() in anomaly_detector.py.
+    # Previously reimplemented here independently, and had drifted from
+    # detect_all_anomalies() by silently ignoring info_count.
+    scoring = calculate_health_score(
+        critical_count = len(all_critical),
+        warning_count  = len(all_warnings),
+        info_count     = len(rule_info)
+    )
+
     return {
         "total_anomalies": len(all_critical) + len(all_warnings),
         "critical_count": len(all_critical),
         "warning_count": len(all_warnings),
-        "health_score": health_score,
+        "health_score": scoring["health_score"],
         "anomalies": {
             "critical": all_critical,
             "warnings": all_warnings,
             "info": rule_info
         },
-        "health_status": health_status,
+        "health_status": scoring["health_status"],
         "info_count": len(rule_info)
     }
 # ─────────────────────────────────────────────────────────────────────────────
@@ -133,7 +132,8 @@ def combine_anomaly_reports(rule_report: dict, stat_report: dict) -> dict:
 def run_dq_agent(
     spark:         SparkSession = None,
     pipeline_name: str          = "E-commerce Orders Pipeline",
-    save_to_disk:  bool         = True
+    save_to_disk:  bool         = True,
+    recent_batches: int         = None
 ) -> dict:
     """
     Runs the complete DQ agent pipeline.
@@ -178,7 +178,7 @@ def run_dq_agent(
         # ── STEP 1: Read metrics from Delta Lake ──────────────────────────
         print("\n📊 STEP 1: Reading metrics from Delta Lake...")
         try:
-            context = build_full_context(spark)
+            context = build_full_context(spark, recent_batches=recent_batches)
             report["steps"]["metrics_reader"] = {
                 "status":           "success",
                 "null_trend":       context["null_rates"]["trend_direction"],

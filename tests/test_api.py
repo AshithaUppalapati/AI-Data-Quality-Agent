@@ -43,7 +43,7 @@ def test_run_agent_success(monkeypatch):
     monkeypatch.setattr(main_module, "stop_spark_session", lambda spark: None)
     monkeypatch.setattr(
         main_module, "run_dq_agent",
-        lambda spark, pipeline_name: fake_result
+        lambda spark, pipeline_name, recent_batches=None: fake_result
     )
 
     response = client.post("/run-agent", json={})
@@ -62,7 +62,7 @@ def test_run_agent_propagates_failure(monkeypatch):
     monkeypatch.setattr(main_module, "create_spark_session", lambda app_name: "FAKE_SPARK")
     monkeypatch.setattr(main_module, "stop_spark_session", lambda spark: None)
 
-    def boom(spark, pipeline_name):
+    def boom(spark, pipeline_name, recent_batches=None):
         raise RuntimeError("simulated pipeline failure")
 
     monkeypatch.setattr(main_module, "run_dq_agent", boom)

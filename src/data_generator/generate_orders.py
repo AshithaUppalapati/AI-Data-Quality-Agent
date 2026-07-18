@@ -119,7 +119,13 @@ def generate_batch(
         f"| Dupes @ {dup_rate:.0%}"
     )
     return df
-
+# Narrative: 1-2 clean baseline → 3-5 the incident (schema drift lands at
+# the 2->3 transition, nulls/violations peak through batch 5) → 6 clean
+# again, representing the incident being caught and fixed. This is what
+# lets recent_batches=1 show a genuinely healthy "current state" while
+# the full historical audit still correctly shows the incident happened.
+NULL_RATE_BY_BATCH    = {1: 0.02, 2: 0.02, 3: 0.045, 4: 0.06, 5: 0.05, 6: 0.02}
+INVALID_RATE_BY_BATCH = {1: 0.01, 2: 0.01, 3: 0.04,  4: 0.06, 5: 0.05, 6: 0.0}
 
 def generate_all_batches(
     n_batches: int = 6,
@@ -130,8 +136,8 @@ def generate_all_batches(
 
     for i in range(1, n_batches + 1):
         ref_date     = base_date + timedelta(days=30 * (i - 1))
-        null_rate    = 0.03 + (i * 0.005)
-        invalid_rate = 0.02 + (i * 0.003)
+        null_rate    = NULL_RATE_BY_BATCH.get(i, 0.03)
+        invalid_rate = INVALID_RATE_BY_BATCH.get(i, 0.02)
         batches[i]   = generate_batch(
             batch_num      = i,
             n_records      = n_records,

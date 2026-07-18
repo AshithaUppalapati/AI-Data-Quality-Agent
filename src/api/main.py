@@ -18,9 +18,11 @@ from dq_metrics.spark_session import create_spark_session, stop_spark_session
 from llm_agent.agent_orchestrator import run_dq_agent, REPORTS_DIR
 from llm_agent.metrics_reader import build_full_context
 from vector_search.rag_assistant import ask_rag_assistant
+from typing import Optional
 
 class RunAgentRequest(BaseModel):
     pipeline_name: str = "E-commerce Orders Pipeline"
+    recent_batches: Optional[int] = None
 class AskRequest(BaseModel):
     question: str
     top_k: int = 3
@@ -37,7 +39,7 @@ def health_check():
 def run_agent(request: RunAgentRequest):
     try:
         spark = create_spark_session(app_name="DQ-Agent-API")
-        return run_dq_agent(spark, pipeline_name=request.pipeline_name)
+        return run_dq_agent(spark, pipeline_name=request.pipeline_name, recent_batches=request.recent_batches)
     except Exception as e:
         print(f"\n>>> ERROR CAUGHT: {type(e).__name__}: {e}")
         import traceback

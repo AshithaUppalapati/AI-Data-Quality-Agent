@@ -32,12 +32,23 @@ from pyspark.sql import SparkSession
 from pyspark.sql import functions as F
 from dq_metrics.delta_writer import read_metric_from_delta
 
+def _filter_recent(df, recent_batches: int = None):
+    """
+    Restrict a metrics DataFrame to the N most recent batches by batch_num.
+    None (default) — no filtering, full history, unchanged behavior.
+    """
+    if recent_batches is None:
+        return df
+    max_batch = df.agg(F.max("batch_num")).collect()[0][0]
+    if max_batch is None:
+        return df
+    return df.filter(F.col("batch_num") > max_batch - recent_batches)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 1. NULL RATES READER
 # ─────────────────────────────────────────────────────────────────────────────
 
-def read_null_rates(spark: SparkSession) -> dict:
+def read_null_rates(spark: SparkSession, recent_batches: int = None) -> dict:
     """
     Read null rates from Delta Lake and return structured summary.
 
@@ -47,7 +58,7 @@ def read_null_rates(spark: SparkSession) -> dict:
       - trend: null rate trend across batches (improving/degrading)
     """
     df = read_metric_from_delta(spark, "null_rates")
-
+    df = _filter_recent(df, recent_batches)
     # Average null rate per column across all batches
     avg_nulls = df.groupBy("column_name") \
                   .agg(F.avg("null_rate_pct").alias("avg_null_rate")) \
@@ -105,7 +116,7 @@ def read_null_rates(spark: SparkSession) -> dict:
 # 2. SCHEMA DRIFT READER
 # ─────────────────────────────────────────────────────────────────────────────
 
-def read_schema_drift(spark: SparkSession) -> dict:
+def read_schema_drift(spark: SparkSession, recent_batches: int = None) -> dict:
     """
     Read schema fingerprints from Delta Lake.
     Detects which batches have different schemas.
@@ -116,6 +127,7 @@ def read_schema_drift(spark: SparkSession) -> dict:
       - schema_changes: what changed between batches
     """
     df = read_metric_from_delta(spark, "schema_drift")
+    df = _filter_recent(df, recent_batches)
     rows = df.orderBy("batch_num").collect()
 
     fingerprints = [
@@ -158,7 +170,7 @@ def read_schema_drift(spark: SparkSession) -> dict:
 # 3. DUPLICATE RATES READER
 # ─────────────────────────────────────────────────────────────────────────────
 
-def read_duplicate_rates(spark: SparkSession) -> dict:
+def read_duplicate_rates(spark: SparkSession, recent_batches: int = None) -> dict:
     """
     Read duplicate rates from Delta Lake.
 
@@ -168,6 +180,7 @@ def read_duplicate_rates(spark: SparkSession) -> dict:
       - trend: improving or degrading
     """
     df   = read_metric_from_delta(spark, "dup_rates")
+    df = _filter_recent(df, recent_batches)
     rows = df.orderBy("batch_num").collect()
 
     batch_data = [
@@ -198,7 +211,7 @@ def read_duplicate_rates(spark: SparkSession) -> dict:
 # 4. RULE VIOLATIONS READER
 # ─────────────────────────────────────────────────────────────────────────────
 
-def read_rule_violations(spark: SparkSession) -> dict:
+def read_rule_violations(spark: SparkSession, recent_batches: int = None) -> dict:
     """
     Read business rule violations from Delta Lake.
 
@@ -209,6 +222,7 @@ def read_rule_violations(spark: SparkSession) -> dict:
       - trend: improving or degrading
     """
     df   = read_metric_from_delta(spark, "violations")
+    df = _filter_recent(df, recent_batches)
     rows = df.orderBy("batch_num").collect()
 
     batch_data = [
@@ -258,7 +272,7 @@ def read_rule_violations(spark: SparkSession) -> dict:
 # 5. VOLUME STATS READER
 # ─────────────────────────────────────────────────────────────────────────────
 
-def read_volume_stats(spark: SparkSession) -> dict:
+def read_volume_stats(spark: SparkSession, recent_batches: int = None) -> dict:
     """
     Read volume statistics from Delta Lake.
 
@@ -268,6 +282,7 @@ def read_volume_stats(spark: SparkSession) -> dict:
       - col_count_trend: schema growth over time
     """
     df   = read_metric_from_delta(spark, "volume_stats")
+    df = _filter_recent(df, recent_batches)
     rows = df.orderBy("batch_num").collect()
 
     batch_data = [
@@ -296,7 +311,7 @@ def read_volume_stats(spark: SparkSession) -> dict:
 # 6. FULL CONTEXT BUILDER — Main entry point
 # ─────────────────────────────────────────────────────────────────────────────
 
-def build_full_context(spark: SparkSession) -> dict:
+def build_full_context(spark: SparkSession, recent_batches: int = None) -> dict:
     """
     Read all metrics and build a complete context package
     for the LLM agent.
@@ -310,14 +325,15 @@ def build_full_context(spark: SparkSession) -> dict:
       it needs. This is the facade pattern — hiding complexity
       behind a simple interface.
     """
-    print("[MetricsReader] Building full context from Delta Lake...")
+    print("[MetricsReader] Building full context from Delta Lake..."
+          + (f" (last {recent_batches} batch(es))" if recent_batches else ""))
 
     context = {
-        "null_rates":      read_null_rates(spark),
-        "schema_drift":    read_schema_drift(spark),
-        "duplicate_rates": read_duplicate_rates(spark),
-        "rule_violations": read_rule_violations(spark),
-        "volume_stats":    read_volume_stats(spark)
+        "null_rates":      read_null_rates(spark, recent_batches),
+        "schema_drift":    read_schema_drift(spark, recent_batches),
+        "duplicate_rates": read_duplicate_rates(spark, recent_batches),
+        "rule_violations": read_rule_violations(spark, recent_batches),
+        "volume_stats":    read_volume_stats(spark, recent_batches)
     }
 
     print("[MetricsReader] Context built successfully")

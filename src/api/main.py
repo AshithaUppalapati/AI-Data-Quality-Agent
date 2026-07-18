@@ -19,6 +19,10 @@ from llm_agent.agent_orchestrator import run_dq_agent, REPORTS_DIR
 from llm_agent.metrics_reader import build_full_context
 from vector_search.rag_assistant import ask_rag_assistant
 from typing import Optional
+from dotenv import load_dotenv
+load_dotenv()
+
+from fastapi import FastAPI, HTTPException, Depends, Header
 
 class RunAgentRequest(BaseModel):
     pipeline_name: str = "E-commerce Orders Pipeline"
@@ -30,12 +34,19 @@ class AskRequest(BaseModel):
     include_current_context: bool = False
 
 app = FastAPI()
+API_KEY = os.getenv("API_KEY")
+
+def verify_api_key(x_api_key: str = Header(None, alias="X-API-Key")):
+    if not API_KEY:
+        raise HTTPException(status_code=500, detail="Server misconfigured: API_KEY not set")
+    if x_api_key != API_KEY:
+        raise HTTPException(status_code=401, detail="Invalid or missing API key")
 
 @app.get("/health")
 def health_check():
     return {"status": "ok", "service": "AI Data Quality Agent API"}
 
-@app.post("/run-agent")
+@app.post("/run-agent", dependencies=[Depends(verify_api_key)])
 def run_agent(request: RunAgentRequest):
     try:
         spark = create_spark_session(app_name="DQ-Agent-API")
@@ -48,7 +59,7 @@ def run_agent(request: RunAgentRequest):
     finally:
         stop_spark_session(spark)
 
-@app.post("/ask")
+@app.post("/ask", dependencies=[Depends(verify_api_key)])
 def ask(request: AskRequest):
     current_context = None
     spark = None
@@ -67,7 +78,7 @@ def ask(request: AskRequest):
         if spark:
             stop_spark_session(spark)
 
-@app.get("/reports")
+@app.get("/reports", dependencies=[Depends(verify_api_key)])
 def list_reports():
     if not os.path.isdir(REPORTS_DIR):
         return []
@@ -99,7 +110,7 @@ def list_reports():
     return summaries
 
 
-@app.get("/reports/{report_id}")
+@app.get("/reports/{report_id}", dependencies=[Depends(verify_api_key)])
 def get_report(report_id: str):
     path = os.path.join(REPORTS_DIR, f"dq_report_{report_id}.json")
     if not os.path.isfile(path):

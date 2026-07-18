@@ -15,6 +15,12 @@ from main import app
 
 client = TestClient(app)
 
+TEST_API_KEY = "test-key-123"
+
+@pytest.fixture(autouse=True)
+def _set_api_key(monkeypatch):
+    monkeypatch.setattr(main_module, "API_KEY", TEST_API_KEY)
+
 
 # ─────────────────────────────────────────────────────────────────────────
 # /health
@@ -46,7 +52,7 @@ def test_run_agent_success(monkeypatch):
         lambda spark, pipeline_name, recent_batches=None: fake_result
     )
 
-    response = client.post("/run-agent", json={})
+    response = client.post("/run-agent", json={}, headers={"X-API-Key": TEST_API_KEY})
     assert response.status_code == 200
     assert response.json() == fake_result
 
@@ -68,7 +74,7 @@ def test_run_agent_propagates_failure(monkeypatch):
     monkeypatch.setattr(main_module, "run_dq_agent", boom)
 
     no_raise_client = TestClient(app, raise_server_exceptions=False)
-    response = no_raise_client.post("/run-agent", json={})
+    response = no_raise_client.post("/run-agent", json={}, headers={"X-API-Key": TEST_API_KEY})
     assert response.status_code == 500
 
 
@@ -92,7 +98,7 @@ def test_ask_without_current_context(monkeypatch):
 
     monkeypatch.setattr(main_module, "ask_rag_assistant", fake_ask_rag_assistant)
 
-    response = client.post("/ask", json={"question": "Has this happened before?"})
+    response = client.post("/ask", json={"question": "Has this happened before?"}, headers={"X-API-Key": TEST_API_KEY})
     assert response.status_code == 200
     body = response.json()
     assert body["answer"] == "fake answer"
@@ -117,7 +123,7 @@ def test_ask_with_current_context(monkeypatch):
     response = client.post("/ask", json={
         "question": "How healthy is the pipeline right now?",
         "include_current_context": True,
-    })
+    }, headers={"X-API-Key": TEST_API_KEY})
     assert response.status_code == 200
     assert captured["current_context"] == {"fake": "context"}
 
@@ -146,7 +152,7 @@ def _write_fake_report(reports_dir, report_id, **overrides):
 
 def test_list_reports_empty(monkeypatch, tmp_path):
     monkeypatch.setattr(main_module, "REPORTS_DIR", str(tmp_path))
-    response = client.get("/reports")
+    response = client.get("/reports", headers={"X-API-Key": TEST_API_KEY})
     assert response.status_code == 200
     assert response.json() == []
 
@@ -156,7 +162,7 @@ def test_list_reports_returns_newest_first(monkeypatch, tmp_path):
     _write_fake_report(tmp_path, "20260710_120000", health_score=50)
     _write_fake_report(tmp_path, "20260715_150000", health_score=90)
 
-    response = client.get("/reports")
+    response = client.get("/reports", headers={"X-API-Key": TEST_API_KEY})
     assert response.status_code == 200
     body = response.json()
     assert len(body) == 2
@@ -170,7 +176,7 @@ def test_list_reports_skips_corrupted_file(monkeypatch, tmp_path):
     with open(os.path.join(tmp_path, "dq_report_broken.json"), "w") as f:
         f.write("{not valid json")
 
-    response = client.get("/reports")
+    response = client.get("/reports", headers={"X-API-Key": TEST_API_KEY})
     assert response.status_code == 200
     body = response.json()
     assert len(body) == 1
@@ -181,12 +187,32 @@ def test_get_report_success(monkeypatch, tmp_path):
     monkeypatch.setattr(main_module, "REPORTS_DIR", str(tmp_path))
     _write_fake_report(tmp_path, "20260715_150000", health_score=90)
 
-    response = client.get("/reports/20260715_150000")
+    response = client.get("/reports/20260715_150000", headers={"X-API-Key": TEST_API_KEY})
     assert response.status_code == 200
     assert response.json()["health_score"] == 90
 
 
 def test_get_report_not_found(monkeypatch, tmp_path):
     monkeypatch.setattr(main_module, "REPORTS_DIR", str(tmp_path))
-    response = client.get("/reports/does_not_exist")
+    response = client.get("/reports/does_not_exist", headers={"X-API-Key": TEST_API_KEY})
     assert response.status_code == 404
+
+def test_run_agent_requires_api_key():
+    response = client.post("/run-agent", json={})
+    assert response.status_code == 401
+
+def test_ask_requires_api_key():
+    response = client.post("/ask", json={"question": "test"})
+    assert response.status_code == 401
+
+def test_run_agent_rejects_wrong_api_key():
+    response = client.post("/run-agent", json={}, headers={"X-API-Key": "wrong-key"})
+    assert response.status_code == 401
+
+def test_list_reports_requires_api_key():
+    response = client.get("/reports")
+    assert response.status_code == 401
+
+def test_get_report_requires_api_key():
+    response = client.get("/reports/some_id")
+    assert response.status_code == 401

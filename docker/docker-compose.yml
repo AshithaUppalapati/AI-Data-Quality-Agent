@@ -44,3 +44,22 @@ services:
     environment:
       - PYTHONPATH=/app/src
     command: python src/data_generator/generate_orders.py
+
+    # ── FastAPI service ──────────────────────────────────────
+  api:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: ai-dq-api
+    ports:
+      - "8000:8000"
+    volumes:
+      - ../data:/app/data
+      - ../src:/app/src
+    environment:
+      - SPARK_LOCAL_IP=127.0.0.1
+      - PYTHONPATH=/app/src
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OPENAI_MODEL=${OPENAI_MODEL}
+      - API_KEY=${API_KEY}
+    command: uvicorn api.main:app --host 0.0.0.0 --port 8000 --reload

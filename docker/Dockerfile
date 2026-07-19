@@ -47,3 +47,6 @@ COPY data/ ./data/
 # ── Default command ───────────────────────────────────────
 # Runs the full DQ agent pipeline
 CMD ["python", "src/llm_agent/agent_orchestrator.py"]
+
+# ── Expose API port ────────────────────────────────────────
+EXPOSE 8000

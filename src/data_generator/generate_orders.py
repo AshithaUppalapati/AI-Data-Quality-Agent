@@ -8,6 +8,17 @@ Generates realistic order data with intentional quality issues:
   - Invalid values (negative prices, future dates, bad enums)
   - Realistic distributions using weighted random sampling
 """
+import os
+import sys
+
+PROJECT_ROOT = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), "..", "..")
+)
+sys.path.insert(0, PROJECT_ROOT)
+sys.path.insert(0, os.path.join(PROJECT_ROOT, "src"))
+
+from logging_config import get_logger
+logger = get_logger(__name__)
 
 import random
 import uuid
@@ -15,6 +26,8 @@ from datetime import datetime, timedelta
 from typing import Optional
 import pandas as pd
 import numpy as np
+from logging_config import get_logger
+logger = get_logger(__name__)
 
 RANDOM_SEED = 42
 random.seed(RANDOM_SEED)
@@ -112,11 +125,9 @@ def generate_batch(
 
     df = pd.DataFrame(records)
 
-    print(
-        f"[Batch {batch_num}] Generated {len(df)} records "
-        f"| Columns: {list(df.columns)} "
-        f"| Nulls @ {null_rate:.0%} "
-        f"| Dupes @ {dup_rate:.0%}"
+    logger.info(
+        "Batch %s: generated %d records | Columns: %s | Nulls @ %.0f%% | Dupes @ %.0f%%",
+        batch_num, len(df), list(df.columns), null_rate * 100, dup_rate * 100
     )
     return df
 # Narrative: 1-2 clean baseline → 3-5 the incident (schema drift lands at

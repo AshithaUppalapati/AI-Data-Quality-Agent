@@ -28,6 +28,8 @@ SEVERITY LEVELS:
 
 import os
 import sys
+from logging_config import get_logger
+logger = get_logger(__name__)
 
 PROJECT_ROOT = os.path.abspath(
     os.path.join(os.path.dirname(__file__), "..", "..")
@@ -453,7 +455,7 @@ def detect_all_anomalies(context: dict) -> dict:
 
     This is the single entry point the LLM agent calls.
     """
-    print("\n[AnomalyDetector] Running anomaly detection...")
+    logger.info("Running anomaly detection...")
 
     all_anomalies = []
     all_anomalies += detect_null_rate_anomalies(
@@ -493,11 +495,11 @@ def detect_all_anomalies(context: dict) -> dict:
         }
     }
 
-    print(f"[AnomalyDetector] Detection complete:")
-    print(f"  Health score:  {report['health_score']}/100 ({report['health_status']})")
-    print(f"  Critical:      {len(critical)}")
-    print(f"  Warnings:      {len(warnings)}")
-    print(f"  Info:          {len(info)}")
+    logger.info(
+        "Detection complete: health=%d/100 (%s) | critical=%d | warnings=%d | info=%d",
+        report['health_score'], report['health_status'],
+        len(critical), len(warnings), len(info)
+    )
 
     return report
 

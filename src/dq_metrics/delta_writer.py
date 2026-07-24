@@ -17,24 +17,19 @@ WHY DELTA LAKE OVER PLAIN PARQUET:
 WRITE MODE — OVERWRITE:
   We overwrite each metric table on every run.
   This keeps the table clean and avoids duplicates.
-  Production improvement: switch to MERGE on batch_num
-  to preserve full history across runs.
 """
 
 import os
 from pyspark.sql import DataFrame
+from logging_config import get_logger
 
+logger = get_logger(__name__)
 
-# ── Project root ──────────────────────────────────────────────────────────────
 PROJECT_ROOT      = os.path.abspath(
     os.path.join(os.path.dirname(__file__), "..", "..")
 )
 METRICS_BASE_PATH = os.path.join(PROJECT_ROOT, "data", "metrics")
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# CORE WRITER
-# ─────────────────────────────────────────────────────────────────────────────
 
 def write_metric_to_delta(
     df:           DataFrame,
@@ -44,27 +39,15 @@ def write_metric_to_delta(
 ) -> str:
     """
     Write a metrics DataFrame to a Delta Lake table.
-
-    Args:
-        df:           Spark DataFrame containing metrics.
-        metric_name:  Name of the metric (used as folder name).
-        partition_by: Column to partition by. Default: batch_num.
-        mode:         Write mode. Default: overwrite.
-                      Options: overwrite, append, merge (future).
-
-    Returns:
-        Path where the Delta table was written.
-
-    WHY WE RETURN THE PATH:
-      Caller can log it, pass it to the LLM agent,
-      or use it to verify the write succeeded.
+    Returns the path where the Delta table was written.
     """
     output_path = os.path.join(METRICS_BASE_PATH, metric_name)
 
-    print(f"[DeltaWriter] Writing {metric_name} → {output_path}")
-    print(f"[DeltaWriter] Rows: {df.count()} | "
-          f"Mode: {mode} | "
-          f"Partition: {partition_by}")
+    logger.info("Writing %s -> %s", metric_name, output_path)
+    logger.info(
+        "Rows: %d | Mode: %s | Partition: %s",
+        df.count(), mode, partition_by
+    )
 
     df.write \
       .format("delta") \
@@ -72,32 +55,19 @@ def write_metric_to_delta(
       .partitionBy(partition_by) \
       .save(output_path)
 
-    print(f"[DeltaWriter] ✅ {metric_name} written successfully")
+    logger.info("%s written successfully", metric_name)
     return output_path
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# WRITE ALL METRICS
-# ─────────────────────────────────────────────────────────────────────────────
 
 def write_all_metrics(results: dict) -> dict:
     """
     Write all DQ metric DataFrames to Delta Lake.
-
-    Args:
-        results: Dict of {metric_name: DataFrame}
-                 from run_dq_metrics_job()
-
-    Returns:
-        Dict of {metric_name: delta_path}
-        so caller knows where everything landed.
+    Returns Dict of {metric_name: delta_path}.
     """
     print("\n" + "="*60)
     print("WRITING METRICS TO DELTA LAKE")
     print("="*60)
 
-    # Map metric names to their partition columns
-    # Most partition by batch_num for time-series queries
     partition_map = {
         "null_rates":   "batch_num",
         "schema_drift": "batch_num",
@@ -119,16 +89,12 @@ def write_all_metrics(results: dict) -> dict:
     print("\n" + "="*60)
     print("ALL METRICS WRITTEN TO DELTA LAKE")
     print("="*60)
-    print("\nDelta table locations:")
+    logger.info("Delta table locations:")
     for name, path in paths.items():
-        print(f"  {name:15} → {path}")
+        logger.info("  %-15s -> %s", name, path)
 
     return paths
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# READER — verify writes worked
-# ─────────────────────────────────────────────────────────────────────────────
 
 def read_metric_from_delta(
     spark,
@@ -138,17 +104,6 @@ def read_metric_from_delta(
     """
     Read a metric back from Delta Lake.
     Optionally filter by batch_num for partition pruning.
-
-    WHY THIS MATTERS:
-      Reading back after write is how you verify
-      the Delta table is correct and queryable.
-      In production this would be a data contract test.
-
-    PARTITION PRUNING DEMO:
-      Passing batch_num adds a filter that tells Spark
-      to only read that partition folder — skipping all others.
-      At scale this is the difference between reading
-      1GB vs 1TB of data.
     """
     path = os.path.join(METRICS_BASE_PATH, metric_name)
 
@@ -156,8 +111,9 @@ def read_metric_from_delta(
 
     if batch_num is not None:
         df = df.filter(df.batch_num == batch_num)
-        print(f"[DeltaReader] {metric_name} | "
-              f"batch_num={batch_num} | "
-              f"Partition pruning active ✅")
+        logger.info(
+            "%s | batch_num=%s | Partition pruning active",
+            metric_name, batch_num
+        )
 
     return df

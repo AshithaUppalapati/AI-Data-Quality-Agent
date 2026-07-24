@@ -23,6 +23,8 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from fastapi import FastAPI, HTTPException, Depends, Header
+from logging_config import get_logger
+logger = get_logger(__name__)
 
 class RunAgentRequest(BaseModel):
     pipeline_name: str = "E-commerce Orders Pipeline"

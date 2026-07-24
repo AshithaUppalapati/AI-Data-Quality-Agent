@@ -4,7 +4,7 @@ Metrics Reader
 Reads DQ metrics from Delta Lake and formats them
 into structured context for the LLM agent.
 
-WHY THIS MODULE EXISTS (Interview Talking Point):
+WHY THIS MODULE EXISTS:
   Delta Lake stores metrics as distributed Spark DataFrames.
   LLMs need plain text or structured dicts to reason about data.
   This module is the bridge — it reads, aggregates, and formats
@@ -31,6 +31,8 @@ sys.path.insert(0, os.path.join(PROJECT_ROOT, "src"))
 from pyspark.sql import SparkSession
 from pyspark.sql import functions as F
 from dq_metrics.delta_writer import read_metric_from_delta
+from logging_config import get_logger
+logger = get_logger(__name__)
 
 def _filter_recent(df, recent_batches: int = None):
     """
@@ -325,8 +327,8 @@ def build_full_context(spark: SparkSession, recent_batches: int = None) -> dict:
       it needs. This is the facade pattern — hiding complexity
       behind a simple interface.
     """
-    print("[MetricsReader] Building full context from Delta Lake..."
-          + (f" (last {recent_batches} batch(es))" if recent_batches else ""))
+    logger.info("Building full context from Delta Lake%s...",
+                f" (last {recent_batches} batch(es))" if recent_batches else "")
 
     context = {
         "null_rates":      read_null_rates(spark, recent_batches),
@@ -336,11 +338,11 @@ def build_full_context(spark: SparkSession, recent_batches: int = None) -> dict:
         "volume_stats":    read_volume_stats(spark, recent_batches)
     }
 
-    print("[MetricsReader] Context built successfully")
-    print(f"  Null rate trend:     {context['null_rates']['trend_direction']}")
-    print(f"  Schema drift:        {context['schema_drift']['drift_count']} events detected")
-    print(f"  Total violations:    {context['rule_violations']['total_violations']}")
-    print(f"  Avg duplicate rate:  {context['duplicate_rates']['avg_dup_rate_pct']}%")
+    logger.info("Context built successfully")
+    logger.info("Null rate trend: %s", context['null_rates']['trend_direction'])
+    logger.info("Schema drift: %d events detected", context['schema_drift']['drift_count'])
+    logger.info("Total violations: %d", context['rule_violations']['total_violations'])
+    logger.info("Avg duplicate rate: %s%%", context['duplicate_rates']['avg_dup_rate_pct'])
 
     return context
 

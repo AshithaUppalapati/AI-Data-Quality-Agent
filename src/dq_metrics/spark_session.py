@@ -9,8 +9,6 @@ WHY A FACTORY PATTERN:
   This means:
     - One place to change Spark config
     - Consistent Delta Lake setup across all jobs
-    - Easy to extend for different environments
-      (local → Databricks → cloud cluster)
     - Testable and mockable
 
 DESIGN DECISION — Environment Awareness:
@@ -23,6 +21,9 @@ DESIGN DECISION — Environment Awareness:
 import os
 from pyspark.sql import SparkSession
 from delta import configure_spark_with_delta_pip
+from logging_config import get_logger
+
+logger = get_logger(__name__)
 
 
 def create_spark_session(
@@ -42,18 +43,14 @@ def create_spark_session(
     """
     env = env or os.getenv("SPARK_ENV", "local")
 
-    print(f"[SparkSessionFactory] Creating session | app={app_name} | env={env}")
+    logger.info("Creating session | app=%s | env=%s", app_name, env)
 
     if env == "databricks":
-        # On Databricks, SparkSession is pre-configured
-        # We just get the existing session
         spark = SparkSession.builder \
             .appName(app_name) \
             .getOrCreate()
 
     elif env == "test":
-        # Minimal config for fast unit tests
-        # Single thread, no UI, tiny memory footprint
         spark = configure_spark_with_delta_pip(
             SparkSession.builder
             .appName(app_name)
@@ -67,8 +64,6 @@ def create_spark_session(
         ).getOrCreate()
 
     else:
-        # Local development — use all available cores
-        # local[*] means "use all CPU cores on this machine"
         spark = configure_spark_with_delta_pip(
             SparkSession.builder
             .appName(app_name)
@@ -100,12 +95,10 @@ def create_spark_session(
         .config("spark.sql.execution.arrow.pyspark.enabled", "false")
         ).getOrCreate()
 
-    # Suppress verbose INFO logs — only show warnings and errors
     spark.sparkContext.setLogLevel("ERROR")
 
-    print(f"[SparkSessionFactory] Session ready | "
-          f"Spark {spark.version} | "
-          f"Master: {spark.sparkContext.master}")
+    logger.info("Session ready | Spark %s | Master: %s",
+                spark.version, spark.sparkContext.master)
 
     return spark
 
@@ -121,4 +114,4 @@ def stop_spark_session(spark: SparkSession) -> None:
     """
     app_name = spark.sparkContext.appName
     spark.stop()
-    print(f"[SparkSessionFactory] Session stopped | app={app_name}")
+    logger.info("Session stopped | app=%s", app_name)

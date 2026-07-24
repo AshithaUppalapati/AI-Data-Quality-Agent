@@ -9,9 +9,6 @@ Output is written to Delta Lake under data/metrics/.
 WHY SPARK OVER PANDAS (Interview Talking Point):
   Pandas loads all data into memory on one machine.
   Spark distributes processing across cores/nodes.
-  For DQ monitoring at scale (billions of rows),
-  Spark is the only viable option. We use it here
-  even for small data to demonstrate production patterns.
 
 MEDALLION ARCHITECTURE:
   data/raw/          → Bronze layer (raw CSVs as-is)
@@ -27,18 +24,18 @@ from pyspark.sql import SparkSession, DataFrame
 from pyspark.sql import functions as F
 
 import sys
-# Add project root to path
 sys.path.insert(0, os.path.abspath(
     os.path.join(os.path.dirname(__file__), "..", "..")
 ))
-# Add src/ to path so dq_metrics package is importable
 sys.path.insert(0, os.path.abspath(
     os.path.join(os.path.dirname(__file__), "..")
 ))
 from dq_metrics.spark_session import create_spark_session, stop_spark_session
 from dq_metrics.delta_writer import write_all_metrics, read_metric_from_delta
+from logging_config import get_logger
 
-# ── Project root resolution ───────────────────────────────────────────────────
+logger = get_logger(__name__)
+
 PROJECT_ROOT = os.path.abspath(
     os.path.join(os.path.dirname(__file__), "..", "..")
 )
@@ -46,19 +43,7 @@ RAW_DATA_PATH     = os.path.join(PROJECT_ROOT, "data", "raw")
 METRICS_BASE_PATH = os.path.join(PROJECT_ROOT, "data", "metrics")
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# 1. DATA LOADER
-# ─────────────────────────────────────────────────────────────────────────────
-
 def load_batch(spark: SparkSession, batch_num: int) -> DataFrame:
-    """
-    Load a single CSV batch into a Spark DataFrame.
-
-    WHY inferSchema=True:
-      Lets Spark sample the data and detect column types automatically.
-      In production you'd use an explicit schema for reliability,
-      but for DQ monitoring we WANT to detect what's actually there.
-    """
     path = os.path.join(RAW_DATA_PATH, f"orders_batch_{batch_num:02d}.csv")
 
     df = spark.read \
@@ -66,31 +51,15 @@ def load_batch(spark: SparkSession, batch_num: int) -> DataFrame:
         .option("inferSchema", "true") \
         .csv(path)
 
-    print(f"[Loader] Batch {batch_num}: {df.count()} rows, "
-          f"{len(df.columns)} cols")
+    logger.info("Batch %d: %d rows, %d cols", batch_num, df.count(), len(df.columns))
     return df
 
 
 def load_all_batches(spark: SparkSession, n_batches: int = 6) -> dict:
-    """Load all batches, return dict of {batch_num: DataFrame}."""
     return {i: load_batch(spark, i) for i in range(1, n_batches + 1)}
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# 2. METRIC 1 — NULL RATES
-# ─────────────────────────────────────────────────────────────────────────────
-
 def compute_null_rates(df: DataFrame, batch_num: int) -> DataFrame:
-    """
-    Compute null rate (%) per column for a given batch.
-
-    Formula: null_count / total_rows * 100
-
-    WHY THIS MATTERS:
-      A sudden spike in null rate on customer_id or order_status
-      signals a broken upstream JOIN or schema mismatch.
-      Tracking per-batch lets us detect TRENDS not just spikes.
-    """
     spark      = df.sparkSession
     total_rows = df.count()
 
@@ -118,26 +87,7 @@ def compute_null_rates(df: DataFrame, batch_num: int) -> DataFrame:
     return spark.createDataFrame(pd.DataFrame(records))
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# 3. METRIC 2 — SCHEMA FINGERPRINT
-# ─────────────────────────────────────────────────────────────────────────────
-
 def compute_schema_fingerprint(df: DataFrame, batch_num: int) -> DataFrame:
-    """
-    Compute a schema fingerprint for a batch.
-    Fingerprint = sorted column names joined as a string.
-
-    WHY SORTED:
-      Column order can change without being a real schema change.
-      Sorting means we only flag actual additions/removals/renames.
-
-    HOW DRIFT IS DETECTED:
-      Compare fingerprints across batches.
-      Different fingerprint = schema changed.
-      Batch 1 vs Batch 3 will show different fingerprints
-      because 'state' was split into
-      'shipping_state' + 'billing_state'.
-    """
     spark       = df.sparkSession
     columns     = sorted(df.columns)
     fingerprint = "|".join(columns)
@@ -152,22 +102,7 @@ def compute_schema_fingerprint(df: DataFrame, batch_num: int) -> DataFrame:
     }]))
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# 4. METRIC 3 — DUPLICATE RATE
-# ─────────────────────────────────────────────────────────────────────────────
-
 def compute_duplicate_rate(df: DataFrame, batch_num: int) -> DataFrame:
-    """
-    Compute duplicate rate based on order_id.
-
-    A duplicate = same order_id appearing more than once.
-    This catches upstream retry storms and ETL re-runs.
-
-    INTERVIEW NOTE:
-      Always clarify what "duplicate" means in context.
-      Here it's order_id. In other domains it might be
-      a composite key (customer_id + order_date + product_id).
-    """
     spark      = df.sparkSession
     total_rows = df.count()
 
@@ -188,26 +123,7 @@ def compute_duplicate_rate(df: DataFrame, batch_num: int) -> DataFrame:
     }]))
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# 5. METRIC 4 — BUSINESS RULE VIOLATIONS
-# ─────────────────────────────────────────────────────────────────────────────
-
 def compute_rule_violations(df: DataFrame, batch_num: int) -> DataFrame:
-    """
-    Detect business rule violations — issues schema validation misses.
-
-    Rules checked:
-      - negative_price:    unit_price < 0
-      - negative_quantity: quantity < 0
-      - future_order_date: order_date > current timestamp
-      - invalid_status:    order_status not in valid set
-
-    WHY THIS IS SENIOR-LEVEL WORK:
-      Any tool can check nulls and types.
-      Business rule validation requires domain knowledge.
-      These checks are what actually protect downstream
-      financial reports, ML models, and dashboards.
-    """
     spark      = df.sparkSession
     total_rows = df.count()
 
@@ -251,19 +167,7 @@ def compute_rule_violations(df: DataFrame, batch_num: int) -> DataFrame:
     }]))
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# 6. METRIC 5 — VOLUME STATS
-# ─────────────────────────────────────────────────────────────────────────────
-
 def compute_volume_stats(df: DataFrame, batch_num: int) -> DataFrame:
-    """
-    Compute row count and basic volume statistics per batch.
-
-    WHY VOLUME MONITORING MATTERS:
-      A sudden 50% drop in row count = missing data upstream.
-      A sudden 200% spike = duplication at source.
-      Volume trends are the fastest signal of pipeline health.
-    """
     spark      = df.sparkSession
     total_rows = df.count()
     col_count  = len(df.columns)
@@ -276,17 +180,7 @@ def compute_volume_stats(df: DataFrame, batch_num: int) -> DataFrame:
     }]))
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# 7. MAIN ORCHESTRATOR
-# ─────────────────────────────────────────────────────────────────────────────
-
 def run_dq_metrics_job(spark: SparkSession, n_batches: int = 6) -> dict:
-    """
-    Orchestrate the full DQ metrics job across all batches.
-
-    Returns dict of {metric_name: combined_DataFrame}
-    so caller can write to Delta Lake or inspect results.
-    """
     print("\n" + "="*60)
     print("DQ METRICS JOB STARTING")
     print("="*60)
@@ -310,7 +204,7 @@ def run_dq_metrics_job(spark: SparkSession, n_batches: int = 6) -> dict:
 
         print(f"--- Batch {batch_num} complete ---")
 
-    print("\n[Orchestrator] Combining all batch metrics...")
+    logger.info("Combining all batch metrics...")
 
     def union_all(dfs):
         return reduce(DataFrame.union, dfs)
@@ -330,18 +224,12 @@ def run_dq_metrics_job(spark: SparkSession, n_batches: int = 6) -> dict:
     return results
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# 8. CLI ENTRY POINT
-# ─────────────────────────────────────────────────────────────────────────────
-
 if __name__ == "__main__":
     spark = create_spark_session(app_name="DQ-Metrics-Job")
 
     try:
-        # Step 1 — Compute metrics
         results = run_dq_metrics_job(spark)
 
-        # Step 2 — Preview in terminal
         print("\n=== NULL RATES (sample) ===")
         results["null_rates"].orderBy(
             "batch_num", "null_rate_pct"
@@ -361,16 +249,12 @@ if __name__ == "__main__":
         print("\n=== VOLUME STATS ===")
         results["volume_stats"].show(truncate=False)
 
-        # ← ADD THIS LINE
-        print("\n>>> CHECKPOINT: About to write to Delta Lake")
+        logger.debug("About to write to Delta Lake")
 
-        # Step 3 — Write to Delta Lake
         paths = write_all_metrics(results)
 
-        # ← ADD THIS LINE
-        print("\n>>> CHECKPOINT: Delta write complete")
+        logger.debug("Delta write complete")
 
-        # Step 4 — Read back to verify
         print("\n=== VERIFICATION: Reading back from Delta Lake ===")
 
         null_rates_delta = read_metric_from_delta(
@@ -387,11 +271,8 @@ if __name__ == "__main__":
         print("\nAll violations (from Delta Lake):")
         violations_delta.orderBy("batch_num").show(truncate=False)
 
-    # ← CHANGE finally TO except+finally TO CATCH SILENT ERRORS
     except Exception as e:
-        print(f"\n>>> ERROR CAUGHT: {type(e).__name__}: {e}")
-        import traceback
-        traceback.print_exc()
+        logger.exception("DQ metrics job failed: %s", e)
 
     finally:
         stop_spark_session(spark)

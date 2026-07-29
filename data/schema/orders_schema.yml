@@ -1,0 +1,178 @@
+# dbt-style schema.yml — data dictionary source for the orders table.
+#
+# This is the machine-readable metadata source indexed by
+# src/vector_search/metadata_indexer.py so /ask can answer schema-aware
+# questions ("what does discount_pct mean", "which columns were added
+# partway through the batches") the same way faiss_indexer.py lets it
+# answer incident-history questions.
+#
+# This project doesn't run dbt — there's no models/ directory or
+# dbt_project.yml. This file follows dbt's actual schema.yml convention
+# for documenting a model's columns anyway, because it's a legitimate,
+# widely-recognized format for structured column metadata, not just a
+# convenient YAML shape invented for this project. If dbt is ever
+# introduced for real, this file drops into models/ largely as-is.
+#
+# Source of truth note: sql_remediation.py's TABLE_SCHEMA constant is a
+# *prompt string* — plain text tuned for an LLM to read inline in a
+# remediation prompt. This file exists for a different job: one column
+# = one retrievable chunk with a stable name/description/data_type/meta
+# shape, suitable for embedding. Keep both in sync if the real schema
+# changes; they serve different consumers and neither generates the
+# other.
+
+version: 2
+
+models:
+  - name: orders
+    description: >
+      E-commerce order line items ingested from six synthetic CSV batches
+      into the medallion pipeline's raw layer, then profiled by the DQ
+      metrics job (dq_metrics_job.py). One row per order. The schema
+      evolves partway through the batch history by design, to exercise
+      schema-drift detection — see the `introduced_in_batch` meta field
+      on shipping_state, billing_state, and discount_pct below.
+    columns:
+      - name: order_id
+        description: Unique identifier for the order.
+        data_type: string
+        tests:
+          - not_null
+          - unique
+
+      - name: customer_id
+        description: Foreign key referencing the customer who placed the order.
+        data_type: string
+
+      - name: order_date
+        description: Timestamp the order was placed.
+        data_type: timestamp
+        tests:
+          - not_in_future
+
+      - name: product_id
+        description: Foreign key referencing the ordered product.
+        data_type: string
+
+      - name: product_category
+        description: >
+          Product category label (e.g. Electronics, Clothing). Free-text
+          at the source — not constrained to an enum, unlike order_status
+          and payment_method below.
+        data_type: string
+
+      - name: quantity
+        description: Units ordered.
+        data_type: integer
+        tests:
+          - positive_value
+
+      - name: unit_price
+        description: Price per unit, in USD.
+        data_type: double
+        tests:
+          - positive_value
+
+      - name: total_amount
+        description: quantity * unit_price, computed at order time.
+        data_type: double
+
+      - name: order_status
+        description: >
+          Lifecycle state of the order.
+        data_type: string
+        tests:
+          - accepted_values:
+              values:
+                - pending
+                - confirmed
+                - shipped
+                - delivered
+                - cancelled
+                - refunded
+
+      - name: payment_method
+        description: Payment instrument used for the order.
+        data_type: string
+        tests:
+          - accepted_values:
+              values:
+                - credit_card
+                - debit_card
+                - paypal
+                - apple_pay
+                - crypto
+
+      - name: batch_num
+        description: >
+          Identifies which of the 6 synthetic ingestion batches produced
+          this row. Pipeline provenance, not a business attribute — used
+          to reproduce the incident timeline (batches 1-2 clean, 3-5
+          carry the recalibration-era incident, 6 clean again) in tests
+          and demos.
+        data_type: integer
+        tests:
+          - not_null
+
+      - name: state
+        description: >
+          Single combined US state field used before the shipping/billing
+          split. Present only in batches 1-2 (12 raw columns); replaced
+          entirely by shipping_state and billing_state starting batch 3
+          (13 raw columns). Not in sql_remediation.py's TABLE_SCHEMA
+          constant, which documents the schema as of batch 3 onward.
+        data_type: string
+        meta:
+          deprecated_after_batch: 2
+          superseded_by:
+            - shipping_state
+            - billing_state
+          note: >
+            This is a column rename/split, not a plain addition like
+            discount_pct — batches 1-2 have real, non-null state data
+            under this name; it doesn't carry forward under the new
+            column names, it's replaced by them. Explains why the raw
+            column count goes 12 (batch 1-2) -> 13 (batch 3-4) -> 14
+            (batch 5-6). Expected schema evolution, not a defect, but
+            don't describe it as "shipping_state/billing_state were null
+            in batches 1-2" — the data existed, just under one field.
+
+      - name: shipping_state
+        description: >
+          US state code for the shipping address. Supersedes the single
+          `state` field used in batches 1-2 (see the `state` column entry
+          above for the rename/split history).
+        data_type: string
+        meta:
+          introduced_in_batch: 3
+          note: >
+            No shipping_state values exist for batches 1-2 because the
+            column didn't exist yet — batches 1-2 used a single `state`
+            field instead (see meta.superseded_by on that entry). This
+            is expected schema evolution, not a data quality defect;
+            don't flag it as an anomaly on its own.
+
+      - name: billing_state
+        description: >
+          US state code for the billing address. Supersedes the single
+          `state` field used in batches 1-2, same as shipping_state.
+        data_type: string
+        meta:
+          introduced_in_batch: 3
+          note: >
+            No billing_state values exist for batches 1-2, same reason
+            and same caveat as shipping_state.
+
+      - name: discount_pct
+        description: >
+          Discount applied to the order, range 0.0-0.30.
+        data_type: double
+        meta:
+          introduced_in_batch: 5
+          note: >
+            Null in batches 1-4 by design — the column didn't exist yet.
+            This is expected schema evolution, not a data quality defect.
+
+    meta:
+      storage: Delta Lake (supports MERGE, UPDATE, DELETE, time travel)
+      platform: Apache Spark / Databricks

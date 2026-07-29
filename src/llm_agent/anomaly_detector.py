@@ -28,14 +28,24 @@ SEVERITY LEVELS:
 
 import os
 import sys
-from logging_config import get_logger
-logger = get_logger(__name__)
 
 PROJECT_ROOT = os.path.abspath(
     os.path.join(os.path.dirname(__file__), "..", "..")
 )
 sys.path.insert(0, PROJECT_ROOT)
 sys.path.insert(0, os.path.join(PROJECT_ROOT, "src"))
+
+# logging_config.py lives in src/, so this import must come after the
+# sys.path.insert() calls above - every other converted file in this
+# project follows that order. This file previously imported it first,
+# which works when something else (e.g. agent_orchestrator.py) has
+# already put src/ on sys.path before importing this module, but fails
+# with ModuleNotFoundError if this file is ever run directly
+# (`python anomaly_detector.py`) or imported first in a fresh process,
+# since Python only auto-adds this file's own directory
+# (src/llm_agent/), not src/ itself.
+from logging_config import get_logger
+logger = get_logger(__name__)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -473,7 +483,7 @@ def detect_all_anomalies(context: dict) -> dict:
     critical = [a for a in all_anomalies if a["severity"] == "CRITICAL"]
     warnings = [a for a in all_anomalies if a["severity"] == "WARNING"]
     info     = [a for a in all_anomalies if a["severity"] == "INFO"]
-    
+
     # Pipeline health score — shared formula, see calculate_health_score()
     scoring = calculate_health_score(
         critical_count = len(critical),

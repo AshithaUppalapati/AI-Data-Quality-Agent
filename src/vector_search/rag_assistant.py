@@ -7,6 +7,16 @@ questions about pipeline health using historical context.
 RAG PATTERN (Interview Talking Point):
   Retrieval Augmented Generation solves the fundamental
   limitation of LLMs — they don't know YOUR data.
+
+TWO RETRIEVAL SOURCES (Interview Talking Point):
+  This assistant searches two separate FAISS indexes, gated by
+  separate keyword heuristics, and merges whatever comes back into
+  one prompt:
+    - dq_incidents  (faiss_indexer.py)     — "has this happened before"
+    - dq_metadata   (metadata_indexer.py)  — "what does this column mean"
+  They're kept as separate indexes on purpose — see metadata_indexer.py's
+  module docstring for why. A question can trigger either, both, or
+  neither; force_retrieval forces both.
 """
 
 import os
@@ -26,6 +36,10 @@ from vector_search.faiss_indexer import (
     search_similar_incidents,
     embed_text
 )
+from vector_search.metadata_indexer import (
+    build_metadata_index,
+    search_similar_columns
+)
 from logging_config import get_logger
 
 logger = get_logger(__name__)
@@ -43,15 +57,21 @@ def get_openai_client() -> OpenAI:
 RAG_SYSTEM_PROMPT = """You are an expert data engineering analytics
 assistant with deep knowledge of data quality monitoring.
 
-You have access to historical DQ incident reports from
-the user's pipeline. Use this context to give specific,
-grounded answers about pipeline health and past incidents.
+You have access to two kinds of grounding context: historical DQ
+incident reports from the user's pipeline, and schema metadata
+describing the orders table's columns (a dbt-style data dictionary).
+Use whichever is relevant — or both — to give specific, grounded
+answers.
 
 Guidelines:
-- Reference specific dates and metrics from the context
+- Reference specific dates and metrics from incident context
+- Reference specific column names, types, and notes from schema context
 - Connect current issues to historical patterns
 - Give actionable recommendations based on past fixes
-- If no relevant history exists, say so clearly
+- If a null rate or missing column is explained by schema evolution
+  (a column introduced partway through the batch history), say so
+  rather than treating it as an anomaly
+- If no relevant history or schema context exists, say so clearly
 - Be concise but thorough
 - Use technical language appropriate for senior engineers
 """
@@ -66,6 +86,18 @@ def needs_retrieval(question: str) -> bool:
     ]
     question_lower = question.lower()
     return any(kw in question_lower for kw in retrieval_keywords)
+
+
+def needs_metadata_retrieval(question: str) -> bool:
+    metadata_keywords = [
+        "column", "columns", "schema", "field", "fields", "table",
+        "data type", "datatype", "means", "mean", "represents",
+        "definition", "dictionary", "nullable", "null rate for",
+        "what is", "what does", "which columns", "primary key",
+        "foreign key", "constraint", "introduced", "added"
+    ]
+    question_lower = question.lower()
+    return any(kw in question_lower for kw in metadata_keywords)
 
 
 def build_context_from_incidents(incidents: list) -> str:
@@ -109,23 +141,64 @@ def build_context_from_incidents(incidents: list) -> str:
     return "\n".join(context_parts)
 
 
+def build_context_from_columns(columns: list) -> str:
+    if not columns:
+        return "No relevant schema metadata found."
+
+    context_parts = ["SCHEMA METADATA CONTEXT:"]
+    context_parts.append("="*50)
+
+    for i, col in enumerate(columns, 1):
+        context_parts.append(f"\nColumn {i}: {col.get('column_name','unknown')}")
+        context_parts.append(f"  Table:        {col.get('model_name','unknown')}")
+        context_parts.append(f"  Data type:    {col.get('data_type','unknown')}")
+        context_parts.append(f"  Description:  {col.get('description','')}")
+
+        meta = col.get("meta", {}) or {}
+        if "introduced_in_batch" in meta:
+            context_parts.append(
+                f"  Introduced:   batch {meta['introduced_in_batch']} "
+                f"(null in earlier batches by design)"
+            )
+        if meta.get("note"):
+            context_parts.append(f"  Note:         {meta['note']}")
+
+        tests = col.get("tests", []) or []
+        if tests:
+            test_names = [
+                t if isinstance(t, str) else list(t.keys())[0]
+                for t in tests
+            ]
+            context_parts.append(f"  Constraints:  {', '.join(test_names)}")
+
+        context_parts.append(
+            f"  Similarity:   {col.get('similarity_score',0)}"
+        )
+
+    context_parts.append("\n" + "="*50)
+    return "\n".join(context_parts)
+
+
 def ask_rag_assistant(
-    question:      str,
+    question:        str,
     current_context: dict = None,
-    top_k:         int    = 3,
+    top_k:           int  = 3,
     force_retrieval: bool = False
 ) -> dict:
-    client      = get_openai_client()
-    use_retrieval = force_retrieval or needs_retrieval(question)
+    client = get_openai_client()
+
+    use_incident_retrieval = force_retrieval or needs_retrieval(question)
+    use_metadata_retrieval = force_retrieval or needs_metadata_retrieval(question)
 
     logger.info("Question: %s", question)
-    logger.info("Retrieval needed: %s", use_retrieval)
+    logger.info("Incident retrieval needed: %s", use_incident_retrieval)
+    logger.info("Metadata retrieval needed: %s", use_metadata_retrieval)
 
     retrieved_incidents = []
-    context_text        = ""
+    incident_context_text = ""
 
-    if use_retrieval:
-        logger.info("Loading FAISS index...")
+    if use_incident_retrieval:
+        logger.info("Loading FAISS incident index...")
         index, metadata = build_faiss_index(force_rebuild=False)
 
         if index.ntotal > 0:
@@ -136,11 +209,36 @@ def ask_rag_assistant(
                 metadata = metadata,
                 top_k    = top_k
             )
-            context_text = build_context_from_incidents(retrieved_incidents)
+            incident_context_text = build_context_from_incidents(retrieved_incidents)
             logger.info("Retrieved %d incidents", len(retrieved_incidents))
         else:
-            context_text = "No historical incidents indexed yet."
+            incident_context_text = "No historical incidents indexed yet."
             logger.info("No incidents in index")
+
+    retrieved_columns = []
+    metadata_context_text = ""
+
+    if use_metadata_retrieval:
+        logger.info("Loading FAISS schema metadata index...")
+        try:
+            meta_index, meta_records = build_metadata_index(force_rebuild=False)
+        except FileNotFoundError as e:
+            logger.warning("Schema metadata unavailable: %s", e)
+            meta_index, meta_records = None, []
+
+        if meta_index is not None and meta_index.ntotal > 0:
+            logger.info("Searching %d schema columns...", meta_index.ntotal)
+            retrieved_columns = search_similar_columns(
+                query    = question,
+                index    = meta_index,
+                metadata = meta_records,
+                top_k    = top_k
+            )
+            metadata_context_text = build_context_from_columns(retrieved_columns)
+            logger.info("Retrieved %d columns", len(retrieved_columns))
+        else:
+            metadata_context_text = "No schema metadata indexed yet."
+            logger.info("No columns in metadata index")
 
     current_state = ""
     if current_context:
@@ -158,15 +256,17 @@ CURRENT PIPELINE STATE:
 """
 
     user_prompt = f"""
-{context_text}
+{incident_context_text}
+
+{metadata_context_text}
 
 {current_state}
 
 USER QUESTION:
 {question}
 
-Please answer based on the historical context above.
-Reference specific incidents by date when relevant.
+Please answer based on the context above. Reference specific
+incidents by date, and specific columns by name, when relevant.
 """
 
     logger.info("Generating answer...")
@@ -187,12 +287,14 @@ Reference specific incidents by date when relevant.
     logger.info("Answer generated (%d tokens, ~$%s)", tokens_used, cost)
 
     return {
-        "question":           question,
-        "answer":             answer,
-        "retrieved_incidents": retrieved_incidents,
-        "retrieval_used":     use_retrieval,
-        "tokens_used":        tokens_used,
-        "cost_usd":           cost
+        "question":             question,
+        "answer":               answer,
+        "retrieved_incidents":  retrieved_incidents,
+        "retrieved_columns":    retrieved_columns,
+        "retrieval_used":       use_incident_retrieval,
+        "metadata_retrieval_used": use_metadata_retrieval,
+        "tokens_used":          tokens_used,
+        "cost_usd":             cost
     }
 
 
@@ -205,7 +307,7 @@ def run_interactive_session():
     print("\n" + "="*60)
     print("  AI DATA QUALITY RAG ASSISTANT")
     print("="*60)
-    print("Ask questions about your pipeline health.")
+    print("Ask questions about your pipeline health or schema.")
     print("Type 'quit' to exit.\n")
 
     current_context = None
@@ -230,7 +332,7 @@ def run_interactive_session():
     demo_questions = [
         "Has schema drift happened before in this pipeline?",
         "What was the worst health score we've seen?",
-        "Have we had negative price issues before and how were they fixed?",
+        "What does the discount_pct column mean and when was it added?",
     ]
 
     print("💡 Demo questions (or type your own):")
@@ -265,7 +367,8 @@ def run_interactive_session():
         print("─"*60)
         print(f"💰 Cost: ${result['cost_usd']} | "
               f"Tokens: {result['tokens_used']} | "
-              f"Sources: {len(result['retrieved_incidents'])}")
+              f"Incidents: {len(result['retrieved_incidents'])} | "
+              f"Columns: {len(result['retrieved_columns'])}")
 
 
 if __name__ == "__main__":

@@ -26,8 +26,6 @@ from datetime import datetime, timedelta
 from typing import Optional
 import pandas as pd
 import numpy as np
-from logging_config import get_logger
-logger = get_logger(__name__)
 
 RANDOM_SEED = 42
 random.seed(RANDOM_SEED)

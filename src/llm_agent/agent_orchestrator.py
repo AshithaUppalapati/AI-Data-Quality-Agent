@@ -26,6 +26,18 @@ ERROR HANDLING STRATEGY:
     → mark failed step in report
   Pipeline never crashes completely.
 
+LOGGING SEVERITY IN THIS FILE (Interview Talking Point):
+  Steps 1-2 (metrics, rule-based detection) re-raise after logging —
+  the pipeline can't meaningfully continue without them, so those use
+  logger.exception(), which logs at ERROR and auto-attaches the full
+  traceback via sys.exc_info(). Steps 3, 5-8 catch, log, and substitute
+  a fallback so the run continues — those stay at logger.warning()
+  (matching the intentional severity: expected/handled, not urgent) but
+  still pass exc_info=True, so the traceback isn't lost just because the
+  failure was handled gracefully. Losing the traceback on a "warning"
+  is exactly how the next person debugging a flaky RAG call ends up
+  with only a one-line message and no idea where it actually failed.
+
 REPORT PERSISTENCE:
   Full report saved to data/reports/ as JSON.
   Why: audit trail, debugging, future RAG indexing.
@@ -148,7 +160,7 @@ def run_dq_agent(
             logger.info("Metrics loaded successfully")
         except Exception as e:
             report["steps"]["metrics_reader"] = {"status": "failed", "error": str(e)}
-            logger.error("Metrics reader failed: %s", e)
+            logger.exception("Metrics reader failed")
             raise
 
         print("\n🔍 STEP 2: Detecting anomalies...")
@@ -171,7 +183,7 @@ def run_dq_agent(
             )
         except Exception as e:
             report["steps"]["anomaly_detector"] = {"status": "failed", "error": str(e)}
-            logger.error("Anomaly detector failed: %s", e)
+            logger.exception("Anomaly detector failed")
             raise
 
         print("\n🧠 STEP 3: Statistical anomaly detection...")
@@ -183,7 +195,7 @@ def run_dq_agent(
             logger.info("%d statistical anomalies", stat_report["total_anomalies"])
         except Exception as e:
             report["steps"]["stat_detector"] = {"status": "failed", "error": str(e)}
-            logger.warning("Statistical detection failed: %s", e)
+            logger.warning("Statistical detection failed: %s", e, exc_info=True)
             stat_report = {"total_anomalies": 0, "critical_count": 0, "warning_count": 0,
                             "anomalies": {"critical": [], "warnings": []}}
 
@@ -208,7 +220,7 @@ def run_dq_agent(
             logger.info("Analysis complete ($%s)", rca_result["cost_usd"])
         except Exception as e:
             report["steps"]["root_cause_analyzer"] = {"status": "failed", "error": str(e)}
-            logger.warning("Root cause analysis failed: %s", e)
+            logger.warning("Root cause analysis failed: %s", e, exc_info=True)
 
         print("\n🔧 STEP 6: Generating SQL remediation...")
         try:
@@ -221,7 +233,7 @@ def run_dq_agent(
             logger.info("SQL fixes generated ($%s)", sql_result["cost_usd"])
         except Exception as e:
             report["steps"]["sql_remediation"] = {"status": "failed", "error": str(e)}
-            logger.warning("SQL remediation failed: %s", e)
+            logger.warning("SQL remediation failed: %s", e, exc_info=True)
 
         print("\n🔔 STEP 7: Generating alerts...")
         try:
@@ -234,7 +246,7 @@ def run_dq_agent(
             logger.info("Alerts generated ($%s)", alerts["total_cost"])
         except Exception as e:
             report["steps"]["alert_generator"] = {"status": "failed", "error": str(e)}
-            logger.warning("Alert generation failed: %s", e)
+            logger.warning("Alert generation failed: %s", e, exc_info=True)
 
         print("\n🔍 STEP 8: Searching for similar past incidents...")
         try:
@@ -252,7 +264,7 @@ def run_dq_agent(
             logger.info("RAG search complete ($%s)", rag_result["cost_usd"])
         except Exception as e:
             report["steps"]["rag_assistant"] = {"status": "failed", "error": str(e)}
-            logger.warning("RAG search failed: %s", e)
+            logger.warning("RAG search failed: %s", e, exc_info=True)
 
         run_end  = datetime.now()
         report["status"]         = "completed"
@@ -267,7 +279,7 @@ def run_dq_agent(
     except Exception as e:
         report["status"] = "failed"
         report["error"]  = str(e)
-        logger.error("Agent pipeline failed: %s", e)
+        logger.exception("Agent pipeline failed")
 
     finally:
         if owns_spark and spark:
